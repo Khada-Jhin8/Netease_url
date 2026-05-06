@@ -33,6 +33,7 @@
 - **🔍 歌曲搜索**：支持关键词搜索网易云音乐库中的歌曲
 - **🎧 单曲解析**：解析单首歌曲的详细信息和下载链接
 - **📋 歌单解析**：批量解析歌单中的所有歌曲信息
+- **📥 歌单一键下载**：选择音质后批量下载歌单到服务器 `/opt/Navidrome/music`
 - **💿 专辑解析**：批量解析专辑中的所有歌曲信息
 - **⬇️ 音乐下载**：支持多种音质的音乐文件下载
 
@@ -222,6 +223,38 @@ Content-Type: application/json
 }
 ```
 
+#### 4.1 歌单一键下载
+```http
+POST /playlist/download
+Content-Type: application/json
+
+{
+  "id": "123456789",
+  "quality": "lossless"
+}
+```
+**说明**：启动后台批量下载任务，歌曲会保存到服务器 `/opt/Navidrome/music`，目录不存在时自动创建。
+
+**响应示例**:
+```json
+{
+  "status": 202,
+  "success": true,
+  "message": "歌单下载任务已启动",
+  "data": {
+    "task_id": "任务ID",
+    "playlist_id": "123456789",
+    "quality": "lossless",
+    "download_dir": "/opt/Navidrome/music"
+  }
+}
+```
+
+```http
+GET /playlist/download/status/任务ID
+```
+**说明**：查询当前下载进度、成功/失败数量和失败歌曲列表。
+
 #### 5. 专辑解析
 ```http
 POST /album
@@ -268,9 +301,11 @@ Content-Type: application/json
    - 如需修改端口，请编辑 `.env` 或 `docker-compose.yml` 文件中的 `ports` 配置，例如：
 
      ```yaml
-     ports:
-       - "8080:5000"
-     ```
+    ports:
+      - "8080:5000"
+    volumes:
+      - /opt/Navidrome/music:/opt/Navidrome/music
+    ```
 
 2. **启动服务**
 

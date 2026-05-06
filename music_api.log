@@ -1,0 +1,10 @@
+2026-05-06 21:17:14,407 - music_api - INFO - __init__:96 - 音乐API服务初始化完成，下载目录: C:\Users\Administrator\Desktop\wyy\Netease_url\downloads
+2026-05-06 21:20:47,840 - music_api - INFO - __init__:96 - 音乐API服务初始化完成，下载目录: C:\Users\Administrator\Desktop\wyy\Netease_url\downloads
+2026-05-06 21:20:56,232 - music_api - INFO - before_request:346 - GET / - IP: 127.0.0.1 - User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36
+2026-05-06 21:20:56,239 - music_api - INFO - after_request:361 - 响应状态: 200
+2026-05-06 21:20:56,978 - music_api - INFO - before_request:346 - GET /favicon.ico - IP: 127.0.0.1 - User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36
+2026-05-06 21:20:56,978 - music_api - INFO - after_request:361 - 响应状态: 404
+2026-05-06 21:21:05,365 - music_api - INFO - before_request:346 - GET / - IP: 127.0.0.1 - User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36
+2026-05-06 21:21:05,365 - music_api - INFO - after_request:361 - 响应状态: 200
+2026-05-06 21:22:54,513 - music_api - INFO - before_request:346 - GET /Playlist - IP: 127.0.0.1 - User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36
+2026-05-06 21:22:55,781 - music_api - INFO - after_request:361 - 响应状态: 200

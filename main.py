@@ -10,11 +10,13 @@
 
 import logging
 import sys
+import threading
 import time
 import traceback
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 from urllib.parse import quote
 from flask import Flask, request, send_file, render_template, Response
 
@@ -39,6 +41,7 @@ class APIConfig:
     port: int = 5000
     debug: bool = False
     downloads_dir: str = 'downloads'
+    navidrome_music_dir: str = '/opt/Navidrome/music'
     max_file_size: int = 500 * 1024 * 1024  # 500MB
     request_timeout: int = 30
     log_level: str = 'INFO'
@@ -82,11 +85,14 @@ class MusicAPIService:
         self.cookie_manager = CookieManager()
         self.netease_api = NeteaseAPI()
         self.downloader = MusicDownloader()
-        
+        self.playlist_download_tasks: Dict[str, Dict[str, Any]] = {}
+        self.playlist_task_lock = threading.Lock()
+
         # 创建下载目录
         self.downloads_path = Path(config.downloads_dir)
         self.downloads_path.mkdir(exist_ok=True)
-        
+        self.navidrome_music_path = Path(config.navidrome_music_dir)
+
         self.logger.info(f"音乐API服务初始化完成，下载目录: {self.downloads_path.absolute()}")
     
     def _setup_logger(self) -> logging.Logger:
@@ -178,6 +184,131 @@ class MusicAPIService:
             'dolby': "杜比全景声"
         }
         return quality_names.get(quality, f"未知音质({quality})")
+
+    def _valid_quality_levels(self) -> List[str]:
+        """获取支持的音质等级"""
+        return ['standard', 'exhigh', 'lossless', 'hires', 'sky', 'jyeffect', 'jymaster', 'dolby']
+
+    def _create_playlist_download_task(self, playlist_id: str, quality: str) -> str:
+        """创建歌单下载任务"""
+        task_id = uuid.uuid4().hex
+        now = int(time.time())
+        task = {
+            'task_id': task_id,
+            'playlist_id': playlist_id,
+            'quality': quality,
+            'status': 'pending',
+            'total': 0,
+            'processed': 0,
+            'success': 0,
+            'failed': 0,
+            'progress': 0,
+            'current_song': '',
+            'errors': [],
+            'download_dir': str(self.navidrome_music_path),
+            'created_at': now,
+            'updated_at': now
+        }
+        with self.playlist_task_lock:
+            self.playlist_download_tasks[task_id] = task
+        return task_id
+
+    def _update_playlist_download_task(self, task_id: str, **updates: Any) -> None:
+        """更新歌单下载任务状态"""
+        with self.playlist_task_lock:
+            task = self.playlist_download_tasks.get(task_id)
+            if not task:
+                return
+            task.update(updates)
+            task['updated_at'] = int(time.time())
+            total = task.get('total', 0) or 0
+            processed = task.get('processed', 0) or 0
+            task['progress'] = int(processed * 100 / total) if total else 0
+
+    def _get_playlist_download_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """获取歌单下载任务快照"""
+        with self.playlist_task_lock:
+            task = self.playlist_download_tasks.get(task_id)
+            if not task:
+                return None
+            return dict(task)
+
+    def _run_playlist_download_task(self, task_id: str, playlist_id: str, quality: str) -> None:
+        """后台执行歌单下载任务"""
+        try:
+            self.navidrome_music_path.mkdir(parents=True, exist_ok=True)
+            playlist_downloader = MusicDownloader(download_dir=str(self.navidrome_music_path))
+            cookies = self._get_cookies()
+            playlist = playlist_detail(playlist_id, cookies)
+            tracks = playlist.get('tracks', []) if playlist else []
+
+            self._update_playlist_download_task(
+                task_id,
+                status='running',
+                total=len(tracks),
+                current_song='准备下载'
+            )
+
+            for song in tracks:
+                song_id = song.get('id')
+                song_name = song.get('name', str(song_id))
+                current_song = f"{song_name} - {song.get('artists', '')}".strip(' -')
+                task_snapshot = self._get_playlist_download_task(task_id) or {}
+                processed = task_snapshot.get('processed', 0)
+                success_count = task_snapshot.get('success', 0)
+                failed_count = task_snapshot.get('failed', 0)
+                errors = list(task_snapshot.get('errors', []))
+
+                self._update_playlist_download_task(task_id, current_song=current_song)
+
+                try:
+                    download_result = playlist_downloader.download_music_file(song_id, quality)
+                    if download_result.success:
+                        success_count += 1
+                    else:
+                        failed_count += 1
+                        errors.append({
+                            'id': song_id,
+                            'name': song_name,
+                            'reason': download_result.error_message or '下载失败'
+                        })
+                except Exception as e:
+                    failed_count += 1
+                    errors.append({
+                        'id': song_id,
+                        'name': song_name,
+                        'reason': str(e)
+                    })
+                    self.logger.warning(f"歌单任务 {task_id} 下载歌曲失败: {song_id} - {e}")
+
+                self._update_playlist_download_task(
+                    task_id,
+                    processed=processed + 1,
+                    success=success_count,
+                    failed=failed_count,
+                    errors=errors
+                )
+
+            final_task = self._get_playlist_download_task(task_id) or {}
+            self._update_playlist_download_task(
+                task_id,
+                status='completed',
+                current_song='下载完成',
+                progress=100,
+                processed=final_task.get('total', final_task.get('processed', 0))
+            )
+        except Exception as e:
+            self.logger.error(f"歌单下载任务失败: {e}\n{traceback.format_exc()}")
+            self._update_playlist_download_task(
+                task_id,
+                status='failed',
+                current_song='任务失败',
+                errors=[{
+                    'id': playlist_id,
+                    'name': '歌单任务',
+                    'reason': str(e)
+                }]
+            )
     
     def _validate_request_params(self, required_params: Dict[str, Any]) -> Optional[Tuple[Dict[str, Any], int]]:
         """验证请求参数"""
@@ -453,6 +584,62 @@ def get_playlist():
         return APIResponse.error(f"获取歌单失败: {str(e)}", 500)
 
 
+@app.route('/playlist/download', methods=['POST'])
+@app.route('/Playlist/Download', methods=['POST'])  # 向后兼容
+def start_playlist_download():
+    """启动歌单批量下载任务"""
+    try:
+        data = api_service._safe_get_request_data()
+        playlist_id = data.get('id')
+        quality = data.get('quality', 'lossless')
+
+        validation_error = api_service._validate_request_params({'playlist_id': playlist_id})
+        if validation_error:
+            return validation_error
+
+        if quality not in api_service._valid_quality_levels():
+            return APIResponse.error(
+                f"无效的音质参数，支持: {', '.join(api_service._valid_quality_levels())}"
+            )
+
+        playlist_id = api_service._extract_music_id(playlist_id)
+        task_id = api_service._create_playlist_download_task(playlist_id, quality)
+        worker = threading.Thread(
+            target=api_service._run_playlist_download_task,
+            args=(task_id, playlist_id, quality),
+            daemon=True
+        )
+        worker.start()
+
+        response_data = {
+            'task_id': task_id,
+            'playlist_id': playlist_id,
+            'quality': quality,
+            'download_dir': str(api_service.navidrome_music_path)
+        }
+        return APIResponse.success(response_data, "歌单下载任务已启动", 202)
+
+    except Exception as e:
+        api_service.logger.error(f"启动歌单下载任务异常: {e}\n{traceback.format_exc()}")
+        return APIResponse.error(f"启动歌单下载任务失败: {str(e)}", 500)
+
+
+@app.route('/playlist/download/status/<task_id>', methods=['GET'])
+@app.route('/Playlist/Download/Status/<task_id>', methods=['GET'])  # 向后兼容
+def get_playlist_download_status(task_id: str):
+    """获取歌单批量下载任务状态"""
+    try:
+        task = api_service._get_playlist_download_task(task_id)
+        if not task:
+            return APIResponse.error("下载任务不存在或已过期", 404)
+
+        return APIResponse.success(task, "获取歌单下载进度成功")
+
+    except Exception as e:
+        api_service.logger.error(f"获取歌单下载任务状态异常: {e}\n{traceback.format_exc()}")
+        return APIResponse.error(f"获取歌单下载任务状态失败: {str(e)}", 500)
+
+
 @app.route('/album', methods=['GET', 'POST'])
 @app.route('/Album', methods=['GET', 'POST'])  # 向后兼容
 def get_album():
@@ -618,6 +805,8 @@ def api_info():
                 '/song': 'GET/POST - 获取歌曲信息',
                 '/search': 'GET/POST - 搜索音乐',
                 '/playlist': 'GET/POST - 获取歌单详情',
+                '/playlist/download': 'POST - 启动歌单批量下载',
+                '/playlist/download/status/<task_id>': 'GET - 获取歌单下载进度',
                 '/album': 'GET/POST - 获取专辑详情',
                 '/download': 'GET/POST - 下载音乐',
                 '/api/info': 'GET - API信息'
@@ -628,6 +817,7 @@ def api_info():
             ],
             'config': {
                 'downloads_dir': str(api_service.downloads_path.absolute()),
+                'navidrome_music_dir': str(api_service.navidrome_music_path),
                 'max_file_size': f"{config.max_file_size // (1024*1024)}MB",
                 'request_timeout': f"{config.request_timeout}s"
             }
